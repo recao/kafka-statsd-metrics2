@@ -19,8 +19,9 @@ package com.airbnb.kafka.kafka09;
 import com.airbnb.metrics.Dimension;
 import com.airbnb.metrics.KafkaStatsDReporter;
 import com.airbnb.metrics.StatsDMetricsRegistry;
-import com.airbnb.metrics.StatsDReporter;
 
+import java.net.InetAddress;
+import java.net.UnknownHostException;
 import java.util.EnumSet;
 import java.util.HashMap;
 import java.util.List;
@@ -37,7 +38,7 @@ import org.apache.kafka.common.metrics.MetricsReporter;
 import org.slf4j.LoggerFactory;
 
 public class StatsdMetricsReporter implements MetricsReporter {
-  private static final org.slf4j.Logger log = LoggerFactory.getLogger(StatsDReporter.class);
+  private static final org.slf4j.Logger log = LoggerFactory.getLogger(StatsdMetricsReporter.class);
 
   public static final String REPORTER_NAME = "kafka-statsd-metrics-0.5";
 
@@ -47,19 +48,21 @@ public class StatsdMetricsReporter implements MetricsReporter {
   public static final String STATSD_METRICS_PREFIX = "external.kafka.statsd.metrics.prefix";
   public static final String POLLING_INTERVAL_SECS = "kafka.metrics.polling.interval.secs";
   public static final String STATSD_DIMENSION_ENABLED = "external.kafka.statsd.dimension.enabled";
+  public static final String MDM_NAMESPACE = "mdm.namespace";
 
   private static final String METRIC_PREFIX = "kafka.";
-  private static final int POLLING_PERIOD_IN_SECONDS = 10;
+
+  private String machineName;
 
   private boolean enabled;
   private final AtomicBoolean running = new AtomicBoolean(false);
+  private String namespace;
   private String host;
   private int port;
   private String prefix;
-  private long pollingPeriodInSeconds;
+  private long pollingPeriodInSeconds = 30;
   private EnumSet<Dimension> metricDimensions;
   private StatsDClient statsd;
-  private Map<String, KafkaMetric> kafkaMetrics;
   private StatsDMetricsRegistry registry;
   private KafkaStatsDReporter underlying = null;
 
@@ -69,11 +72,11 @@ public class StatsdMetricsReporter implements MetricsReporter {
 
   @Override
   public void init(List<KafkaMetric> metrics) {
+    machineName = getMachineName();
     registry = new StatsDMetricsRegistry();
-    kafkaMetrics = new HashMap<String, KafkaMetric>();
 
     if (enabled) {
-      startReporter(POLLING_PERIOD_IN_SECONDS);
+      startReporter(pollingPeriodInSeconds);
     } else {
       log.warn("KafkaStatsDReporter is disabled");
     }
@@ -81,6 +84,41 @@ public class StatsdMetricsReporter implements MetricsReporter {
     for (KafkaMetric metric : metrics) {
       metricChange(metric);
     }
+  }
+
+  private String getMachineName() {
+    String machineName = "localhost";
+
+    try {
+      InetAddress localMachine = InetAddress.getLocalHost();
+      machineName              = localMachine.getHostName();
+    } catch (UnknownHostException e) {
+      System.out.println(String.format("Error: %s\nStackTrace: %s", e.getMessage(), e.getStackTrace()));
+    }
+
+    return machineName;
+  }
+
+  private String serializeDimensions(Map<String, String> dimensions) {
+    StringBuffer sb = new StringBuffer();
+
+    sb.append("{");
+    if (dimensions != null) {
+      for (Map.Entry<String, String> dim : dimensions.entrySet()) {
+        sb.append("\"")
+                .append(dim.getKey())
+                .append("\":\"")
+                .append(dim.getValue())
+                .append("\",");
+      }
+    }
+
+    if (sb.charAt(sb.length() - 1) == ',') {
+      sb.deleteCharAt(sb.length() - 1);
+    }
+
+    sb.append("}");
+    return sb.toString();
   }
 
   private String getMetricName(final KafkaMetric metric) {
@@ -92,18 +130,10 @@ public class StatsdMetricsReporter implements MetricsReporter {
   @Override
   public void metricChange(final KafkaMetric metric) {
     String name = getMetricName(metric);
-
-    StringBuilder strBuilder = new StringBuilder();
-
-    for (String key : metric.metricName().tags().keySet()) {
-      strBuilder.append(key).append(":").append(metric.metricName().tags().get(key)).append(",");
-    }
-
-    if (strBuilder.length() > 0) {
-      strBuilder.deleteCharAt(strBuilder.length() - 1);
-    }
-
-    registry.register(name, metric, strBuilder.toString());
+    Map<String, String> dimensions = new HashMap<String, String>();
+    dimensions.put("environment", "KafkaConnectACS");
+    dimensions.put("machine", getMachineName());
+    registry.register(name, metric, serializeDimensions(dimensions));
     log.debug("metrics name: {}", name);
   }
 
@@ -125,6 +155,8 @@ public class StatsdMetricsReporter implements MetricsReporter {
       Boolean.valueOf((String) configs.get(STATSD_REPORTER_ENABLED)) : false;
     host = configs.containsKey(STATSD_HOST) ?
       (String) configs.get(STATSD_HOST) : "localhost";
+    namespace = configs.containsKey(MDM_NAMESPACE) ?
+            (String) configs.get(MDM_NAMESPACE) : "siphon";
     port = configs.containsKey(STATSD_PORT) ?
       Integer.valueOf((String) configs.get(STATSD_PORT)) : 8125;
     prefix = configs.containsKey(STATSD_METRICS_PREFIX) ?
@@ -144,7 +176,7 @@ public class StatsdMetricsReporter implements MetricsReporter {
         log.warn("KafkaStatsDReporter: {} is already running", REPORTER_NAME);
       } else {
         statsd = createStatsd();
-        underlying = new KafkaStatsDReporter(statsd, registry);
+        underlying = new KafkaStatsDReporter(namespace, statsd, registry);
         underlying.start(pollingPeriodInSeconds, TimeUnit.SECONDS);
         log.info(
           "Started KafkaStatsDReporter: {} with host={}, port={}, polling_period_secs={}, prefix={}",

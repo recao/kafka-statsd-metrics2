@@ -8,37 +8,37 @@ import java.util.Map;
 import org.apache.kafka.common.Metric;
 
 public class StatsDMetricsRegistry {
-  private final Map<String, Metric> metrics;
-  private final Map<String, String> tags;
+  private final Map<String, Metric> name_metric;
+  private final Map<String, String> name_dimensions;
 
   public StatsDMetricsRegistry() {
-    metrics= new HashMap<String, Metric>();
-    tags = new HashMap<String, String>();
+    name_metric= new HashMap<String, Metric>();
+    name_dimensions = new HashMap<String, String>();
   }
 
   public void register(
     String metricName,
     Metric metric,
-    String tag
+    String dimensions
   ) {
-    metrics.put(metricName, metric);
-    tags.put(metricName, tag);
+    name_metric.put(metricName, metric);
+    name_dimensions.put(metricName, dimensions);
   }
 
   public void unregister(String metricName) {
-    metrics.remove(metricName);
-    tags.remove(metricName);
+    name_metric.remove(metricName);
+    name_dimensions.remove(metricName);
   }
 
   public List<String> getMetricsName() {
-    return new ArrayList<String>(metrics.keySet());
+    return new ArrayList<String>(name_metric.keySet());
   }
 
   public Metric getMetric(String metricName) {
-    return metrics.get(metricName);
+    return name_metric.get(metricName);
   }
 
-  public String getTag(String metricName) {
-    return tags.get(metricName);
+  public String getDimensions(String metricName) {
+    return name_dimensions.get(metricName);
   }
 }
